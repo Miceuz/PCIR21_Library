@@ -17,6 +17,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef __PCIR21_H
 #define __PCIR21_H
 
+#include <Arduino.h>
+
 #define RX_BUF_LEN 267
 
 class PCIR21 {
@@ -49,8 +51,10 @@ class PCIR21 {
 			MODE_SINGLE,
 			MODE_CONTINUOUS
 		};
-		PCIR21(Uart* port);
+
+		PCIR21(Uart& port);
 		~PCIR21(){};
+		void setup();
 		void reset(uint32_t pin);
 		void query_version();
 		void eval_mode(EvalMode_t mode);
@@ -61,14 +65,16 @@ class PCIR21 {
 		void set_range(Range_t range);
 		void sleep();
 
-	private:
+	protected:
+        Uart& _serial;
 		uint8_t rx_buff[RX_BUF_LEN];
 		float temp[16*4+1];
-		Uart* serial;
 		void read_response();
 
 		void read_pixel_data();
 		float calculate_temperature();
 		bool data_header_valid(uint32_t packet_length);
 };
+
 #endif
+

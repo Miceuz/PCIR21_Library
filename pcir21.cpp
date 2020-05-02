@@ -18,91 +18,100 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "pcir21.h"
 
+PCIR21::PCIR21(Uart& port) : _serial(port) {}
+
+void PCIR21::setup()
+{
+  _serial.begin(230400);
+  while(!_serial);
+}
+
 void PCIR21::reset(uint32_t reset_pin) {
   pinMode(reset_pin, OUTPUT);
   digitalWrite(reset_pin, LOW);
   delay(100);
   digitalWrite(reset_pin, HIGH);
-  delay(10);
+  delay(100);
   read_response();//digest all esp32 startup traffic
   delay(1000);
+  read_response();//digest all esp32 startup traffic
+  Serial.println();
+  Serial.println("--------------------------------------");
+  Serial.println();
+  delay(2000);
 }
 
 //just ignore the response for now
 //TODO check if command was successful
 void PCIR21::read_response() {
-    delayMicroseconds(50);//50us > 10 bits at 230400 baud 
-    while(serial->available()){
-      // char c = serial->read();
-      // if(c > 31 && c < 127)
-      //   Serial->print(c);
-      // else {
-      //   Serial->print("0x");
-      //   Serial->print(c, HEX);
-      // }
-      // Serial->print(' ');
-      delayMicroseconds(50);
+  while(!_serial.available());  
+  Serial.println("read response:");
+  while(_serial.available()){
+    char c = _serial.read();
+    if(c > 31 && c < 127)
+      Serial.print(c);
+    else {
+      Serial.print("0x");
+      Serial.print(c, HEX);
     }
-    // Serial.println();
-}
-
-PCIR21::PCIR21(Uart* port): 
-  serial(port)
-{
-  serial->begin(230400);
+    Serial.print(' ');
+    // delay(1);
+    delayMicroseconds(500);//50us > 10 bits at 230400 baud 
+  }
+  Serial.println();
 }
 
 void PCIR21::query_version() {
-  serial->print("CMDV");
-  serial->print('\x00');
-  serial->print('\x23');
+  _serial.print("CMDV");
+  _serial.print('\x00');
+  _serial.print('\x23');
   read_response();
 }
 
 void PCIR21::eval_mode(EvalMode_t mode) {
   uint8_t crc[]={0x1A, 0x19, 0x1B};
-  serial->print("CMDE");
-  serial->print((char) mode);
-  serial->print((char) crc[mode]);
+  _serial.print("CMDE");
+  _serial.print((char) mode);
+  _serial.print((char) crc[mode]);
   read_response();
 }
 
 void PCIR21::set_fps(Fps_t fps) {
   uint8_t crc[]={0x1A, 0x1B, 0x1C, 0x1D};
-  serial->print("CMDF");
-  serial->print((char) fps);
-  serial->print((char) (crc[fps]));
+  _serial.print("CMDF");
+  _serial.print((char) fps);
+  _serial.print((char) (crc[fps]));
   read_response();
 }
 
 void PCIR21::set_mode(Mode_t mode) {
   uint8_t crc[]={0x19, 0x18, 0x1A};
-  serial->print("CMDC");
-  serial->print((char) mode);
-  serial->print((char) crc[mode]);
+  _serial.print("CMDC");
+  _serial.print((char) mode);
+  _serial.print((char) crc[mode]);
   read_response();
 }
 
 void PCIR21::set_frame_mode(FrameMode_t mode) {
   uint8_t crc[]={0x21, 0x22};
-  serial->print("CMDM");
-  serial->print((char) mode);
-  serial->print((char) (crc[mode]));
+  _serial.print("CMDM");
+  _serial.print((char) mode);
+  _serial.print((char) (crc[mode]));
   read_response();
 }
 
 void PCIR21::set_range(Range_t range) {
   uint8_t crc[]={0x23, 0x24};
-  serial->print("CMDO");
-  serial->print((char) range);
-  serial->print((char) (crc[range]));
+  _serial.print("CMDO");
+  _serial.print((char) range);
+  _serial.print((char) (crc[range]));
   read_response();
 }
 
 void PCIR21::sleep() {
-  serial->print("CMDS");
-  serial->print('\x01');
-  serial->print('\x28');
+  _serial.print("CMDS");
+  _serial.print('\x01');
+  _serial.print('\x28');
   read_response();
 }
 
@@ -135,28 +144,130 @@ bool PCIR21::data_header_valid(uint32_t packet_length) {
   uint32_t data_length  = 0;
   
   if(packet_length > 4) {
-    data_length = rx_buff[3] << 8 * rx_buff[4];
+    data_length = rx_buff[3] << 8 | rx_buff[4];
   }
 
-  return RX_BUF_LEN == packet_length && 'D' == rx_buff[0] && 'A' == rx_buff[1] && 'A' == rx_buff[2] && 64 == data_length;
+  return RX_BUF_LEN == packet_length && 'D' == rx_buff[0] && 'A' == rx_buff[1] && 'T' == rx_buff[2] && 64 == data_length;
 }
 
 //Frame format
 //DAT[data lenght, 2 bytes mbs lsb][ambient temperature, 4 bytes float][pixel data, 4 bytes float]*16*4
 void PCIR21::read_data(float* temperature) {
-  if(serial->available()) {
+  if(_serial.available()) {
     uint32_t i = 0;
     //TODO make it non-blocking, read one char at a time.
-    while(serial->available()){
+    while(_serial.available()){
       if(i < RX_BUF_LEN) {
-        rx_buff[i++] = serial->read();
+        rx_buff[i++] = _serial.read();
       }
-      delayMicroseconds(50);//slack off one byte at 230400 baud. 
+      delayMicroseconds(500);//slack off one byte at 230400 baud. 
     }
-    
+    Serial.print("Got DATA: ");
+    Serial.println(i);    
+    Serial.print("Header valid: ");
+    Serial.println(data_header_valid(i));
+
     if(data_header_valid(i)) {
       read_pixel_data();
       *temperature = calculate_temperature();
     }
   }
 }
+/*
+void pcir_setup() {
+  _serial.begin(230400);
+  while(!_serial);
+  pinPeripheral(10, PIO_SERCOM);
+  pinPeripheral(11, PIO_SERCOM);
+}
+
+void pcir_reset() {
+  pinMode(8, OUTPUT);
+  digitalWrite(8, LOW);
+  delay(100);
+  digitalWrite(8, HIGH);
+  delay(10);
+  pcir_read_response();
+  delay(1000);
+}
+
+void pcir_read_response() {
+    Serial.println("Read response:");
+    delay(1);
+    while(_serial.available()){
+      char c = _serial.read();
+      if(c > 31 && c < 127)
+        Serial.print(c);
+      else {
+        Serial.print("0x");
+        Serial.print(c, HEX);
+      }
+      Serial.print(' ');
+      delay(1);
+    }
+    Serial.println();
+}
+
+void pcir_operate() {
+  _serial.print("CMDE");
+  _serial.print('\x00');
+  _serial.print('\x19');
+}
+
+void pcir_set_fps(int fps) {
+  uint8_t crc[]={0x1A, 0x1B, 0x1C, 0x1D};
+  _serial.print("CMDF");
+  _serial.print((char) fps);
+  _serial.print((char) (crc[fps]));
+}
+
+void pcir_open() {
+  _serial.print("CMDC");
+  _serial.print('\x01');
+  _serial.print('\x18');
+}
+
+uint8_t rx_buff[RX_BUF_LEN];
+float temp[16*4+1];
+
+void pcir_read_data(float* temperature) {
+  if(_serial.available()) {
+    int i = 0;
+    while(_serial.available()){
+      rx_buff[i++] = _serial.read();
+      delay(1);
+    }
+    Serial.print("Got data ");
+    Serial.println(i);
+    
+    if(267 == i && 'D' == rx_buff[0]) {
+      float* p = (float*)((char*)rx_buff + 5);
+      float env_temp = *p;
+      Serial.print("environment temperature: ");
+      Serial.println(env_temp);
+      int i = 0;
+
+      Serial.print("Length:");
+      Serial.println((rx_buff[3]<<8) | (rx_buff[4])); 
+
+//      for(int i = 0; i < 16*4; i++) {
+//        float f = *(p+i);
+//        temp[i++] = f;
+//      }
+      for(int j = 5; j < 261; j+=4) {
+        uint32_t t = ((uint32_t)rx_buff[j+3] << 24) | ((uint32_t)rx_buff[j+2] << 16) | ((uint32_t)rx_buff[j+1] << 8) | ((uint32_t)(rx_buff[j+0]) & 0x000000FF);
+        float f;
+        memcpy(&f, &t, 4);
+        temp[i++] = f;
+      }
+      float sum = 0;
+      for(int i = 1; i < 16*4+1; i++) {
+        sum += temp[i];
+      }
+      *temperature = sum/64;
+      Serial.println(*temperature);
+    }
+  }
+}
+
+*/
