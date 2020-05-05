@@ -31,34 +31,59 @@ void PCIR21::reset(uint32_t reset_pin) {
   digitalWrite(reset_pin, LOW);
   delay(100);
   digitalWrite(reset_pin, HIGH);
-  delay(100);
-  read_response();//digest all esp32 startup traffic
-  delay(1000);
-  read_response();//digest all esp32 startup traffic
+  while(!_serial.available());
+  while(_serial.available()) {
+    Serial.write(_serial.read());
+  }  
+  // read_response();//digest all esp32 startup traffic
+  delay(2000);
+  // read_response();//digest all esp32 startup traffic
+  while(!_serial.available());
+  while(_serial.available()) {
+    Serial.write(_serial.read());
+  }  
   Serial.println();
   Serial.println("--------------------------------------");
   Serial.println();
-  delay(2000);
 }
 
 //just ignore the response for now
 //TODO check if command was successful
+//PCIR21 response format
+//On success: RET[the command being acknowldged]\r\n Example: RETCMDE\x00\x1A\r\n
+//On error: RETERR[the command being acknowldged]\r\n] Example: RETERRCMDE\x00\x1A\r\n
 void PCIR21::read_response() {
-  while(!_serial.available());  
-  Serial.println("read response:");
-  while(_serial.available()){
-    char c = _serial.read();
-    if(c > 31 && c < 127)
-      Serial.print(c);
-    else {
-      Serial.print("0x");
-      Serial.print(c, HEX);
+  uint32_t bytesRead = _serial.readBytesUntil('\n', rx_buff, 14);
+  if(bytesRead > 0) {
+    rx_buff[bytesRead] = 0;
+    // Serial.println((char *)rx_buff);
+    for (int i = 0; i < bytesRead; i++) {
+      char c = rx_buff[i];  
+      if(c > 31 && c < 127)
+        Serial.print(c);
+      else {
+        Serial.print("0x");
+        Serial.print(c, HEX);
+      }
+      Serial.print(' ');
     }
-    Serial.print(' ');
-    // delay(1);
-    delayMicroseconds(500);//50us > 10 bits at 230400 baud 
+    Serial.println();
   }
-  Serial.println();
+  // while(!_serial.available());  
+  // Serial.println("read response:");
+  // while(_serial.available()){
+  //   char c = _serial.read();
+  //   if(c > 31 && c < 127)
+  //     Serial.print(c);
+  //   else {
+  //     Serial.print("0x");
+  //     Serial.print(c, HEX);
+  //   }
+  //   Serial.print(' ');
+  //   // delay(1);
+  //   delayMicroseconds(500);//50us > 10 bits at 230400 baud 
+  // }
+  // Serial.println();
 }
 
 void PCIR21::query_version() {
@@ -140,38 +165,62 @@ float PCIR21::calculate_temperature() {
   return max;
 }
 
-bool PCIR21::data_header_valid(uint32_t packet_length) {
+bool PCIR21::is_data_header_valid(uint32_t packet_length) {
   uint32_t data_length  = 0;
   
-  if(packet_length > 4) {
+  if(RX_BUF_LEN == packet_length) {
     data_length = rx_buff[3] << 8 | rx_buff[4];
+    return 'D' == rx_buff[0] && 'A' == rx_buff[1] && 'T' == rx_buff[2] && 64 == data_length;
+  } else {
+    return false;
   }
-
-  return RX_BUF_LEN == packet_length && 'D' == rx_buff[0] && 'A' == rx_buff[1] && 'T' == rx_buff[2] && 64 == data_length;
 }
 
 //Frame format
 //DAT[data lenght, 2 bytes mbs lsb][ambient temperature, 4 bytes float][pixel data, 4 bytes float]*16*4
-void PCIR21::read_data(float* temperature) {
+bool PCIR21::read_data(float* temperature) {
+  // while(!_serial.available());
   if(_serial.available()) {
-    uint32_t i = 0;
-    //TODO make it non-blocking, read one char at a time.
-    while(_serial.available()){
-      if(i < RX_BUF_LEN) {
-        rx_buff[i++] = _serial.read();
-      }
-      delayMicroseconds(500);//slack off one byte at 230400 baud. 
-    }
-    Serial.print("Got DATA: ");
-    Serial.println(i);    
-    Serial.print("Header valid: ");
-    Serial.println(data_header_valid(i));
+    //Frame transmission should take 11.5ms @ 230400
+    //Fasters refresh rate is 3 FPS - i.e. frame every 333s
+    //Reasonable interframe time is ~320ms
+    //We timeout at frame time + 1/3 of interframe time so PCIR21 has time to push the data 
+    _serial.setTimeout(320/3+20);
+    uint32_t bytesRead = _serial.readBytes(rx_buff, RX_BUF_LEN);   
+    // Serial.print("Got DATA: ");
+    // Serial.println(bytesRead);    
 
-    if(data_header_valid(i)) {
+    // for (int i = 0; i < bytesRead; i++) {
+    //   char c = rx_buff[i];  
+    //   if(c > 31 && c < 127)
+    //     Serial.print(c);
+    //   else {
+    //     Serial.print("0x");
+    //     Serial.print(c, HEX);
+    //   }
+    //   Serial.print(' ');
+    // }
+    // Serial.println();
+
+    // Serial.print("Header valid: ");
+    // Serial.println(is_data_header_valid(bytesRead));
+
+    if(is_data_header_valid(bytesRead)) {
       read_pixel_data();
       *temperature = calculate_temperature();
+      return true;
+    } else {
+      // Serial.print("Dropping data: ");
+      // Serial.println(_serial.available());
+      while(_serial.available()) {
+        _serial.read();
+      }
+      //if we got garbade, poll serial for some time to hopefully 
+      //catch a gap between frames we can synchronize on
+      // uint32_t bytesRead = _serial.readBytes(rx_buff, RX_BUF_LEN);
     }
   }
+  return false;
 }
 /*
 void pcir_setup() {

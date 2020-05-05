@@ -27,7 +27,8 @@ class PCIR21 {
 		  FPS_05,
 		  FPS_1,
 		  FPS_2,
-		  FPS_3
+		  FPS_3,
+		  FPS_4
 		};
 
 		enum Range_t {
@@ -61,7 +62,7 @@ class PCIR21 {
 		void set_fps(Fps_t fps);
 		void set_mode(Mode_t mode);
 		void set_frame_mode(FrameMode_t mode);
-		void read_data(float* temperature);
+		bool read_data(float* temperature);
 		void set_range(Range_t range);
 		void sleep();
 
@@ -73,7 +74,7 @@ class PCIR21 {
 
 		void read_pixel_data();
 		float calculate_temperature();
-		bool data_header_valid(uint32_t packet_length);
+		bool is_data_header_valid(uint32_t packet_length);
 };
 
 #endif
